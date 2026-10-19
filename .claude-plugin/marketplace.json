@@ -1,0 +1,5 @@
+{
+  "name": "addon-mods",
+  "owner": { "name": "Ilya Pryzhykau" },
+  "plugins": [{ "name": "keep-sessions", "source": "./" }]
+}
