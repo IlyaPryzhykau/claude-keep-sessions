@@ -1,5 +1,13 @@
 {
   "name": "addon-mods",
-  "owner": { "name": "Ilya Pryzhykau" },
-  "plugins": [{ "name": "keep-sessions", "source": "./" }]
+  "owner": {
+    "name": "Ilya Pryzhykau"
+  },
+  "description": "Mods for Claude Code by Ilya Pryzhykau: keep-sessions keeps the Claude Desktop Code-tab session list across account switches.",
+  "plugins": [
+    {
+      "name": "keep-sessions",
+      "source": "./"
+    }
+  ]
 }
