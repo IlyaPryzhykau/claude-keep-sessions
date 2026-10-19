@@ -1,94 +1,88 @@
 # keep-sessions
 
-Мод (плагин) для Claude Code, который не даёт пропасть списку чатов во вкладке Code
-десктоп-приложения Claude при смене аккаунта. Только macOS.
+**English** | [Русский](README.ru.md)
 
-*English summary at the bottom.*
+A Claude Code mod (plugin) that keeps the Code-tab session list in the Claude
+desktop app when you switch accounts. macOS only.
 
-## Проблема
+## The problem
 
-Сами чаты (транскрипты) лежат в `~/.claude/projects` и общие для всех аккаунтов.
-Но список в боковой панели приложение строит из файлов-указателей в папке
+Transcripts live in `~/.claude/projects` and are shared by every account.
+The sidebar list, however, is built from pointer files in
 
 ```
-~/Library/Application Support/Claude/claude-code-sessions/<аккаунт>/<организация>/local_*.json
+~/Library/Application Support/Claude/claude-code-sessions/<account>/<organization>/local_*.json
 ```
 
-У каждого аккаунта своя папка. После входа под другим аккаунтом список пустой,
-хотя сами чаты на диске никуда не делись.
+Each account has its own folder, so after signing in with another account the
+list is empty even though the chats are still on disk.
 
-## Что делает мод
+## What the mod does
 
-- При старте каждой сессии и по команде `/keep-sessions sync` копирует недостающие
-  указатели из папок других аккаунтов в папку текущего.
-- Файлы никогда не перезаписывает.
-- Чаты, удалённые из списка (`deleted_*`), не восстанавливает.
-- Перед первым копированием делает резервную копию в `~/.claude/keep-sessions-backup-<дата>/`.
-- Вне десктоп-приложения (в терминале) ничего не делает.
+- At the start of every session, and on `/keep-sessions sync`, copies the
+  missing pointer files from other account folders into the current one.
+- Never overwrites a file.
+- Does not restore sessions you removed from the list (`deleted_*` markers).
+- Backs up the current list to `~/.claude/keep-sessions-backup-<date>/` before
+  the first copy.
+- Does nothing outside the desktop app (in a terminal session).
 
-## Установка
+## Install
 
-В терминале, в сессии Claude Code:
+In a terminal Claude Code session:
 
 ```
 /plugin install keep-sessions --marketplace IlyaPryzhykau/claude-keep-sessions
 ```
 
-Из оболочки:
+From a shell:
 
 ```bash
 claude plugin install keep-sessions --marketplace IlyaPryzhykau/claude-keep-sessions
 ```
 
-На вопрос `Add marketplace?` ответить `y`, затем выбрать область `user`.
-Нужен Claude Code 2.1.299 или новее (в десктоп-приложении он уже такой).
+Answer `y` to `Add marketplace?`, then pick the `user` scope.
+Requires Claude Code 2.1.299 or newer (the desktop app already ships it).
 
-В десктоп-приложении, где `/plugin` не работает: нажать «+» рядом с полем ввода,
-затем Plugins, Add marketplace с `IlyaPryzhykau/claude-keep-sessions`, затем Add plugin.
+In the desktop app, where `/plugin` does not run: click **+** next to the
+prompt box, then **Plugins**, **Add marketplace** with
+`IlyaPryzhykau/claude-keep-sessions`, then **Add plugin**.
 
-Из локальной папки (без GitHub):
+From a local folder, without GitHub:
 
 ```bash
-claude plugin marketplace add /путь/к/claude-keep-sessions
+claude plugin marketplace add /path/to/claude-keep-sessions
 claude plugin install keep-sessions@addon-mods
 ```
 
-## Как пользоваться при смене аккаунта
+## Switching accounts
 
-1. Выйти из аккаунта и войти под другим через меню приложения.
-2. Открыть любую сессию во вкладке Code. Мод сам подложит указатели и покажет
-   уведомление, сколько чатов добавлено.
-3. Полностью перезапустить приложение (Cmd+Q и открыть снова). Список чатов
-   и папок проектов будет прежним.
+1. Sign out and sign in with the other account from the app menu.
+2. Open any Code-tab session. The mod copies the pointers and shows a toast
+   with the number of chats added.
+3. Fully quit and reopen the app (Cmd+Q). The chats and project folders are
+   back in the sidebar.
 
-Команды внутри сессии:
+Commands inside a session:
 
-| Команда | Что делает |
+| Command | What it does |
 | --- | --- |
-| `/keep-sessions status` | Сколько чатов в каждой папке и сколько будет добавлено. Ничего не меняет. |
-| `/keep-sessions sync` | Скопировать недостающие указатели сейчас. |
+| `/keep-sessions status` | Chats per folder and how many would be added. Changes nothing. |
+| `/keep-sessions sync` | Copy the missing pointers now. |
 
-## Ограничения
+## Limitations
 
-- Формат папок приложения недокументирован и может измениться с обновлением.
-- Облачные сессии и сессии Remote Control могут появиться в списке, но локально не возобновятся.
-- Сам вход и выход из аккаунта мод не делает: токен выдаёт приложение.
+- The app's folder layout is undocumented and may change with an update.
+- Cloud and Remote Control sessions may show up in the list but will not
+  resume locally.
+- The mod does not sign you in or out: the app issues the token.
 
-## Разработка
+## Development
 
 ```bash
 claude plugin validate .
 claude plugin test .
 ```
 
-Логика выбора файлов лежит в `hooks/plan.ts` и покрыта тестами в `hooks/keep-sessions.test.ts`.
-
-## English summary
-
-Claude Desktop keeps the Code-tab session list per account in
-`~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`,
-while transcripts in `~/.claude/projects` are shared. Switching accounts empties the sidebar.
-This mod copies the missing pointer files from other account folders into the current one
-at session start (or via `/keep-sessions sync`), never overwrites, skips deleted sessions and
-backs up the current list first. Fully quit and reopen the app (Cmd+Q) afterwards.
-Install: `/plugin install keep-sessions --marketplace IlyaPryzhykau/claude-keep-sessions`.
+The file-selection logic lives in `hooks/plan.ts` and is covered by
+`hooks/keep-sessions.test.ts`.
