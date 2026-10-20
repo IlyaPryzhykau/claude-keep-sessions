@@ -174,3 +174,53 @@ test('a missing session-list folder for the current account does nothing', async
   expect(Object.keys(writes)).toEqual([])
   expect(toasts).toEqual([])
 })
+
+// ---- a second app data folder (Claude-01, …) beside Claude ----
+
+const ROOT_01 = `${HOME}/Library/Application Support/Claude-01/claude-code-sessions`
+const EXEC_01 = `${HOME}/Library/Application Support/Claude-01/claude-code/2.1.0/abc/claude.app/Contents/MacOS/claude`
+
+test('a session of Claude-01 syncs into Claude-01 from every app data folder', async ($, on) => {
+  mock.env(on, {
+    HOME,
+    CLAUDE_CODE_ACCOUNT_UUID: A.account,
+    CLAUDE_CODE_ORGANIZATION_UUID: A.org,
+    CLAUDE_CODE_EXECPATH: EXEC_01,
+  })
+  world(on)
+  const { writes } = fakeFs(on, {
+    [`${ROOT_01}/acc-a/org-a`]: { 'local_1.json': '{}' },
+    [`${ROOT}/acc-a/org-a`]: { 'local_2.json': 'SAME ACCOUNT, OTHER APP' },
+    [`${ROOT}/acc-b/org-b`]: { 'local_3.json': 'OTHER ACCOUNT' },
+    [`${HOME}/Library/Application Support/Slack`]: { 'x.json': '{}' },
+  })
+
+  await $.session.start(START)
+
+  expect(writes[`${ROOT_01}/acc-a/org-a/local_2.json`]).toBe('SAME ACCOUNT, OTHER APP')
+  expect(writes[`${ROOT_01}/acc-a/org-a/local_3.json`]).toBe('OTHER ACCOUNT')
+  expect(Object.keys(writes).some(p => p.startsWith(`${ROOT}/`))).toBe(false)
+})
+
+test('without the CLI path the current account is found in whichever app folder holds it', async ($, on) => {
+  desktopEnv(on, A)
+  world(on)
+  fakeFs(on, {
+    [`${ROOT_01}/acc-a/org-a`]: { 'local_1.json': '{}' },
+    [`${ROOT}/acc-b/org-b`]: { 'local_2.json': '{}' },
+  })
+
+  const status = await $.command.run(typed('status'))
+  expect(status.text).toContain('Текущий аккаунт acc-a/org-a: 1 чатов')
+  expect(status.text).toContain('Будет добавлено: 1.')
+})
+
+test('when nothing is found, status says which check failed', async ($, on) => {
+  desktopEnv(on, A)
+  world(on)
+  fakeFs(on, { [`${ROOT}/acc-b/org-b`]: { 'local_2.json': '{}' } })
+
+  const status = await $.command.run(typed('status'))
+  expect(status.text).toContain('ACCOUNT=acc-a')
+  expect(status.text).toContain('Claude: нет')
+})

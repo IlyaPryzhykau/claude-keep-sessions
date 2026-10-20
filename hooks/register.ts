@@ -3,16 +3,22 @@ import type { EngineInterface, Register } from 'claude-code'
 import { countPointers, isPointer, planSync, sameFolder } from './plan'
 import type { Folder, FolderId } from './plan'
 
-const SESSIONS_DIR = 'Library/Application Support/Claude/claude-code-sessions'
+const APP_SUPPORT = 'Library/Application Support'
+const SESSIONS = 'claude-code-sessions'
+
+/** The app data dir this session runs from (Claude, Claude-01, …), read from the CLI path. */
+const currentAppDir = (execPath: string | undefined): string =>
+  /\/Library\/Application Support\/([^/]+)\//.exec(execPath ?? '')?.[1] ?? 'Claude'
+
+const isAppDir = (name: string): boolean => name === 'Claude' || name.startsWith('Claude-')
 
 type Scan = {
-  root: string
   targetPath: string
   target: Folder
   others: Folder[]
 }
 
-const folderPath = (root: string, id: FolderId): string => `${root}/${id.account}/${id.org}`
+const folderPath = (id: FolderId): string => `${id.root}/${id.account}/${id.org}`
 
 const names = async ($: EngineInterface, path: string): Promise<string[]> =>
   (await $.fs.list(path)).map(entry => entry.name)
@@ -28,23 +34,41 @@ async function scan($: EngineInterface): Promise<Scan | undefined> {
   const org = await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID')
   if (!home || !account || !org) return undefined
 
-  const root = `${home}/${SESSIONS_DIR}`
-  const current: FolderId = { account, org }
-  const targetPath = folderPath(root, current)
-  if (!(await $.fs.exists(targetPath))) return undefined
+  const appSupport = `${home}/${APP_SUPPORT}`
+  const roots: string[] = []
+  for (const app of await $.fs.list(appSupport)) {
+    if (app.kind !== 'dir' || !isAppDir(app.name)) continue
+    const r = `${appSupport}/${app.name}/${SESSIONS}`
+    if (await $.fs.exists(r)) roots.push(r)
+  }
+
+  // Prefer the app dir this session runs from; otherwise the first one holding this account.
+  const preferred = `${appSupport}/${currentAppDir(await $.env.get('CLAUDE_CODE_EXECPATH'))}/${SESSIONS}`
+  let root: string | undefined
+  for (const r of [preferred, ...roots]) {
+    if (await $.fs.exists(`${r}/${account}/${org}`)) {
+      root = r
+      break
+    }
+  }
+  if (!root) return undefined
+  const current: FolderId = { root, account, org }
+  const targetPath = folderPath(current)
 
   const target: Folder = { id: current, names: await names($, targetPath) }
   const others: Folder[] = []
-  for (const acc of await $.fs.list(root)) {
-    if (acc.kind !== 'dir') continue
-    for (const o of await $.fs.list(`${root}/${acc.name}`)) {
-      if (o.kind !== 'dir') continue
-      const id: FolderId = { account: acc.name, org: o.name }
-      if (sameFolder(id, current)) continue
-      others.push({ id, names: await names($, folderPath(root, id)) })
+  for (const r of roots) {
+    for (const acc of await $.fs.list(r)) {
+      if (acc.kind !== 'dir') continue
+      for (const o of await $.fs.list(`${r}/${acc.name}`)) {
+        if (o.kind !== 'dir') continue
+        const id: FolderId = { root: r, account: acc.name, org: o.name }
+        if (sameFolder(id, current)) continue
+        others.push({ id, names: await names($, folderPath(id)) })
+      }
     }
   }
-  return { root, targetPath, target, others }
+  return { targetPath, target, others }
 }
 
 type SyncOutcome = { copied: number; backupDir?: string }
@@ -68,7 +92,7 @@ async function sync($: EngineInterface, found: Scan): Promise<SyncOutcome> {
   for (const copy of plan.copies) {
     const destination = `${found.targetPath}/${copy.name}`
     if (await $.fs.exists(destination)) continue
-    const text = await $.fs.read(`${folderPath(found.root, copy.from)}/${copy.name}`)
+    const text = await $.fs.read(`${folderPath(copy.from)}/${copy.name}`)
     await $.fs.write(destination, text)
     copied++
   }
@@ -132,7 +156,25 @@ export const register: Register = on => {
     }
     try {
       const found = await scan($)
-      if (!found) return { text: NOT_DESKTOP }
+      if (!found) {
+        const home = await $.env.get('HOME')
+        const account = await $.env.get('CLAUDE_CODE_ACCOUNT_UUID')
+        const org = await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID')
+        const exec = await $.env.get('CLAUDE_CODE_EXECPATH')
+        const diag = [
+          `HOME=${home ? 'ok' : 'нет'} ACCOUNT=${account ? account.slice(0, 8) : 'нет'} ORG=${org ? org.slice(0, 8) : 'нет'}`,
+          `EXECPATH=${exec ?? 'нет'} → ${currentAppDir(exec)}`,
+        ]
+        if (home && account && org) {
+          const appSupport = `${home}/${APP_SUPPORT}`
+          for (const app of await $.fs.list(appSupport)) {
+            if (app.kind !== 'dir' || !isAppDir(app.name)) continue
+            const dir = `${appSupport}/${app.name}/${SESSIONS}/${account}/${org}`
+            diag.push(`${app.name}: ${(await $.fs.exists(dir)) ? 'есть' : 'нет'}`)
+          }
+        }
+        return { text: `${NOT_DESKTOP}\n${diag.join('\n')}` }
+      }
       if (action === 'status') return { text: statusText(found) }
 
       const { copied, backupDir } = await sync($, found)
