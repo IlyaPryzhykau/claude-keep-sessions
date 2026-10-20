@@ -14,6 +14,10 @@ The sidebar list, however, is built from pointer files in
 ~/Library/Application Support/Claude/claude-code-sessions/<account>/<organization>/local_*.json
 ```
 
+An app installed as a second copy keeps its data in `Claude-01` (`Claude-02`, …)
+instead of `Claude`; the mod reads every such folder and writes into the one the
+current session runs from.
+
 Each account has its own folder, so after signing in with another account the
 list is empty even though the chats are still on disk.
 

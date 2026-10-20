@@ -8,7 +8,8 @@
  * `deleted_<id>` markers for sessions the person removed from the list.
  */
 
-export type FolderId = { account: string; org: string }
+/** `root` is the claude-code-sessions folder of one app data dir (Claude, Claude-01, …). */
+export type FolderId = { root?: string; account: string; org: string }
 export type Folder = { id: FolderId; names: readonly string[] }
 export type Copy = { from: FolderId; name: string }
 export type Plan = {
@@ -35,7 +36,7 @@ export const deletedIds = (names: readonly string[]): Set<string> => {
 }
 
 export const sameFolder = (a: FolderId, b: FolderId): boolean =>
-  a.account === b.account && a.org === b.org
+  a.root === b.root && a.account === b.account && a.org === b.org
 
 export function planSync(target: Folder, sources: readonly Folder[]): Plan {
   const have = new Set(target.names)
