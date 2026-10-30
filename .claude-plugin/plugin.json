@@ -1,6 +1,6 @@
 {
   "name": "keep-sessions",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keeps the Claude desktop Code-tab session list when you switch accounts: copies session pointers from other account folders into the current one.",
   "author": {
     "name": "Ilya Pryzhykau"

@@ -1,21 +1,28 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { planSync } from './plan'
+import { pickTarget, planSync, rootOfExec } from './plan'
 
-const A = { account: 'acc-a', org: 'org-a' }
-const B = { account: 'acc-b', org: 'org-b' }
+const HOME = '/Users/test'
+const BASE = `${HOME}/Library/Application Support`
+const ROOT = `${BASE}/Claude/claude-code-sessions`
+const ROOT2 = `${BASE}/Claude-acc2/claude-code-sessions`
+const EXEC = `${BASE}/Claude/claude-code/2.1.309/abc/claude.app/Contents/MacOS/claude`
+const EXEC2 = `${BASE}/Claude-acc2/claude-code/2.1.309/abc/claude.app/Contents/MacOS/claude`
+
+const A = { root: ROOT, account: 'acc-a', org: 'org-a' }
+const B = { root: ROOT, account: 'acc-b', org: 'org-b' }
 
 test('planSync copies missing pointers and skips existing, deleted and duplicates', () => {
   const target = { id: A, names: ['local_1.json', 'deleted_2', 'backlog', 'scheduled-tasks.json'] }
   const sources = [
     { id: B, names: ['local_1.json', 'local_2.json', 'local_3.json', 'local_4.json', 'deleted_4'] },
-    { id: { account: 'acc-c', org: 'org-c' }, names: ['local_3.json', 'local_5.json', 'notes.txt'] },
+    { id: { root: ROOT, account: 'acc-c', org: 'org-c' }, names: ['local_3.json', 'local_5.json', 'notes.txt'] },
   ]
   const plan = planSync(target, sources)
   expect(plan.copies).toEqual([
     { from: B, name: 'local_3.json' },
-    { from: { account: 'acc-c', org: 'org-c' }, name: 'local_5.json' },
+    { from: { root: ROOT, account: 'acc-c', org: 'org-c' }, name: 'local_5.json' },
   ])
   expect(plan.skippedExisting).toBe(2)
   expect(plan.skippedDeleted).toBe(2)
@@ -26,10 +33,37 @@ test('planSync ignores a source that is the target itself', () => {
   expect(plan.copies).toEqual([])
 })
 
-// ---- an in-memory file system beneath the plugin ----
+test('planSync takes the same account from another app instance as a source', () => {
+  const sameElsewhere = { ...A, root: ROOT2 }
+  const plan = planSync({ id: A, names: [] }, [{ id: sameElsewhere, names: ['local_9.json'] }])
+  expect(plan.copies).toEqual([{ from: sameElsewhere, name: 'local_9.json' }])
+})
 
-const HOME = '/Users/test'
-const ROOT = `${HOME}/Library/Application Support/Claude/claude-code-sessions`
+test('rootOfExec names the instance from the CLI path, and nothing for other paths', () => {
+  expect(rootOfExec(EXEC, BASE)).toBe(ROOT)
+  expect(rootOfExec(EXEC2, BASE)).toBe(ROOT2)
+  expect(rootOfExec(`${BASE}/Claude 2/claude-code/2.1.309/claude`, BASE)).toBe(
+    `${BASE}/Claude 2/claude-code-sessions`,
+  )
+  expect(rootOfExec('/usr/local/bin/claude', BASE)).toBeUndefined()
+  expect(rootOfExec(`${BASE}/ClaudeX/claude-code/claude`, BASE)).toBeUndefined()
+  expect(rootOfExec(`${BASE}/Claude-acc2/bin/claude`, BASE)).toBeUndefined()
+  expect(rootOfExec(undefined, BASE)).toBeUndefined()
+})
+
+test('pickTarget: the own instance wins; without it only an unambiguous folder', () => {
+  const here = { id: A, names: [] }
+  const there = { id: { ...A, root: ROOT2 }, names: [] }
+  const other = { id: B, names: [] }
+  const current = { account: 'acc-a', org: 'org-a' }
+  expect(pickTarget([here, there, other], current, ROOT2)).toBe(there)
+  expect(pickTarget([here, there, other], current, ROOT)).toBe(here)
+  expect(pickTarget([here, there, other], current, undefined)).toBeUndefined()
+  expect(pickTarget([here, other], current, undefined)).toBe(here)
+  expect(pickTarget([there, other], current, ROOT)).toBeUndefined()
+})
+
+// ---- an in-memory file system beneath the plugin ----
 
 type Tree = Record<string, Record<string, string>>
 
@@ -80,11 +114,12 @@ function fakeFs(on: On, tree: Tree) {
   return { writes }
 }
 
-function desktopEnv(on: On, id: { account: string; org: string }) {
+function desktopEnv(on: On, id: { account: string; org: string }, execPath?: string) {
   mock.env(on, {
     HOME,
     CLAUDE_CODE_ACCOUNT_UUID: id.account,
     CLAUDE_CODE_ORGANIZATION_UUID: id.org,
+    ...(execPath ? { CLAUDE_CODE_EXECPATH: execPath } : {}),
   })
 }
 
@@ -138,8 +173,8 @@ test('/keep-sessions status is a dry run and sync reports already synced', async
 
   await $.session.start(START)
   const status = await $.command.run(typed('status'))
-  expect(status.text).toContain('Текущий аккаунт acc-a/org-a: 2 чатов')
-  expect(status.text).toContain('Другой аккаунт acc-b/org-b: 1 чатов')
+  expect(status.text).toContain('Текущий аккаунт Claude/acc-a/org-a: 2 чатов')
+  expect(status.text).toContain('Другая папка Claude/acc-b/org-b: 1 чатов')
   expect(status.text).toContain('Будет добавлено: 0, уже есть: 1.')
   expect(Object.keys(writes)).toEqual([])
 
@@ -173,4 +208,55 @@ test('a missing session-list folder for the current account does nothing', async
   await $.session.start(START)
   expect(Object.keys(writes)).toEqual([])
   expect(toasts).toEqual([])
+})
+
+test('a second app instance (--user-data-dir) gets the chats of the first; other apps are ignored', async ($, on) => {
+  desktopEnv(on, { account: 'acc-c', org: 'org-a' }, EXEC2)
+  const { toasts } = world(on)
+  const { writes } = fakeFs(on, {
+    [`${ROOT}/acc-a/org-a`]: { 'local_1.json': '{"a":1}', 'local_2.json': '{"a":2}' },
+    [`${ROOT2}/acc-c/org-a`]: { 'local_7.json': '{"c":7}' },
+    [`${BASE}/Slack/claude-code-sessions/acc-x/org-x`]: { 'local_9.json': 'NOT CLAUDE' },
+  })
+
+  await $.session.start(START)
+
+  expect(writes[`${ROOT2}/acc-c/org-a/local_1.json`]).toBe('{"a":1}')
+  expect(writes[`${ROOT2}/acc-c/org-a/local_2.json`]).toBe('{"a":2}')
+  expect(Object.keys(writes).filter(p => p.includes('local_9'))).toEqual([])
+  expect(Object.keys(writes).filter(p => p.startsWith(ROOT + '/'))).toEqual([])
+  expect(toasts[0]).toContain('Добавлено 2 чатов')
+
+  const status = await $.command.run(typed('status'))
+  expect(status.text).toContain('Текущий аккаунт Claude-acc2/acc-c/org-a: 3 чатов')
+  expect(status.text).toContain('Другая папка Claude/acc-a/org-a: 2 чатов')
+})
+
+test('the same account in two instances: the CLI path picks the folder', async ($, on) => {
+  desktopEnv(on, { account: 'acc-a', org: 'org-a' }, EXEC)
+  world(on)
+  const { writes } = fakeFs(on, {
+    [`${ROOT}/acc-a/org-a`]: { 'local_1.json': '{}' },
+    [`${ROOT2}/acc-a/org-a`]: { 'local_5.json': '{"second":5}' },
+  })
+
+  await $.session.start(START)
+
+  expect(writes[`${ROOT}/acc-a/org-a/local_5.json`]).toBe('{"second":5}')
+  expect(Object.keys(writes).filter(p => p.startsWith(ROOT2 + '/'))).toEqual([])
+})
+
+test('the same account in two instances and no CLI path: nothing is written', async ($, on) => {
+  desktopEnv(on, { account: 'acc-a', org: 'org-a' })
+  const { toasts } = world(on)
+  const { writes } = fakeFs(on, {
+    [`${ROOT}/acc-a/org-a`]: { 'local_1.json': '{}' },
+    [`${ROOT2}/acc-a/org-a`]: { 'local_5.json': '{}' },
+  })
+
+  await $.session.start(START)
+  expect(Object.keys(writes)).toEqual([])
+  expect(toasts).toEqual([])
+  const status = await $.command.run(typed('status'))
+  expect(status.text).toContain('непонятно, какая у этого окна')
 })

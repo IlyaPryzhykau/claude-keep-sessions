@@ -21,6 +21,11 @@ list is empty even though the chats are still on disk.
 
 - At the start of every session, and on `/keep-sessions sync`, copies the
   missing pointer files from other account folders into the current one.
+- Also covers a second app instance started with `--user-data-dir` in a sibling
+  `~/Library/Application Support/Claude-…` folder (e.g. `Claude-acc2`): each
+  instance gets the other's chats. The mod tells its own instance by the path of
+  the Claude Code binary that instance runs; when the path is elsewhere it takes
+  the account's folder only if there is exactly one.
 - Never overwrites a file.
 - Does not restore sessions you removed from the list (`deleted_*` markers).
 - Backs up the current list to `~/.claude/keep-sessions-backup-<date>/` before

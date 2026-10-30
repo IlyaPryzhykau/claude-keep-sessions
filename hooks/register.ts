@@ -1,26 +1,37 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { countPointers, isPointer, planSync, sameFolder } from './plan'
+import { DATA_DIR, SESSIONS, countPointers, isPointer, pickTarget, planSync, rootOfExec, sameFolder } from './plan'
 import type { Folder, FolderId } from './plan'
 
-const SESSIONS_DIR = 'Library/Application Support/Claude/claude-code-sessions'
+const APP_SUPPORT = 'Library/Application Support'
 
 type Scan = {
-  root: string
   targetPath: string
   target: Folder
   others: Folder[]
 }
 
-const folderPath = (root: string, id: FolderId): string => `${root}/${id.account}/${id.org}`
+const folderPath = (id: FolderId): string => `${id.root}/${id.account}/${id.org}`
 
 const names = async ($: EngineInterface, path: string): Promise<string[]> =>
   (await $.fs.list(path)).map(entry => entry.name)
 
+/** `<data dir>/claude-code-sessions` of every app instance on this Mac. */
+async function sessionRoots($: EngineInterface, base: string): Promise<string[]> {
+  if (!(await $.fs.exists(base))) return []
+  const roots: string[] = []
+  for (const entry of await $.fs.list(base)) {
+    if (entry.kind !== 'dir' || !DATA_DIR.test(entry.name)) continue
+    const root = `${base}/${entry.name}/${SESSIONS}`
+    if (await $.fs.exists(root)) roots.push(root)
+  }
+  return roots
+}
+
 /**
  * Finds the current account's session-list folder and every other
- * account/org folder beside it. Undefined when this is not a desktop
- * session (no account variables) or the folder does not exist yet.
+ * account/org folder of every app instance. Undefined when this is not a
+ * desktop session (no account variables) or the folder does not exist yet.
  */
 async function scan($: EngineInterface): Promise<Scan | undefined> {
   const home = await $.env.get('HOME')
@@ -28,23 +39,24 @@ async function scan($: EngineInterface): Promise<Scan | undefined> {
   const org = await $.env.get('CLAUDE_CODE_ORGANIZATION_UUID')
   if (!home || !account || !org) return undefined
 
-  const root = `${home}/${SESSIONS_DIR}`
-  const current: FolderId = { account, org }
-  const targetPath = folderPath(root, current)
-  if (!(await $.fs.exists(targetPath))) return undefined
-
-  const target: Folder = { id: current, names: await names($, targetPath) }
-  const others: Folder[] = []
-  for (const acc of await $.fs.list(root)) {
-    if (acc.kind !== 'dir') continue
-    for (const o of await $.fs.list(`${root}/${acc.name}`)) {
-      if (o.kind !== 'dir') continue
-      const id: FolderId = { account: acc.name, org: o.name }
-      if (sameFolder(id, current)) continue
-      others.push({ id, names: await names($, folderPath(root, id)) })
+  const base = `${home}/${APP_SUPPORT}`
+  const folders: Folder[] = []
+  for (const root of await sessionRoots($, base)) {
+    for (const acc of await $.fs.list(root)) {
+      if (acc.kind !== 'dir') continue
+      for (const o of await $.fs.list(`${root}/${acc.name}`)) {
+        if (o.kind !== 'dir') continue
+        const id: FolderId = { root, account: acc.name, org: o.name }
+        folders.push({ id, names: await names($, folderPath(id)) })
+      }
     }
   }
-  return { root, targetPath, target, others }
+
+  const ownRoot = rootOfExec(await $.env.get('CLAUDE_CODE_EXECPATH'), base)
+  const target = pickTarget(folders, { account, org }, ownRoot)
+  if (!target) return undefined
+  const others = folders.filter(f => !sameFolder(f.id, target.id))
+  return { targetPath: folderPath(target.id), target, others }
 }
 
 type SyncOutcome = { copied: number; backupDir?: string }
@@ -68,14 +80,18 @@ async function sync($: EngineInterface, found: Scan): Promise<SyncOutcome> {
   for (const copy of plan.copies) {
     const destination = `${found.targetPath}/${copy.name}`
     if (await $.fs.exists(destination)) continue
-    const text = await $.fs.read(`${folderPath(found.root, copy.from)}/${copy.name}`)
+    const text = await $.fs.read(`${folderPath(copy.from)}/${copy.name}`)
     await $.fs.write(destination, text)
     copied++
   }
   return backedUp > 0 ? { copied, backupDir } : { copied }
 }
 
-const short = (id: FolderId): string => `${id.account.slice(0, 8)}/${id.org.slice(0, 8)}`
+/** `Claude-acc2/1d471898/2f0388e2`: the instance's data dir, then account and org. */
+const short = (id: FolderId): string => {
+  const dir = id.root.split('/').slice(-2, -1)[0] ?? ''
+  return `${dir}/${id.account.slice(0, 8)}/${id.org.slice(0, 8)}`
+}
 
 function statusText(found: Scan): string {
   const plan = planSync(found.target, found.others)
@@ -83,9 +99,9 @@ function statusText(found: Scan): string {
     `Текущий аккаунт ${short(found.target.id)}: ${countPointers(found.target.names)} чатов в списке.`,
   ]
   for (const other of found.others) {
-    lines.push(`Другой аккаунт ${short(other.id)}: ${countPointers(other.names)} чатов.`)
+    lines.push(`Другая папка ${short(other.id)}: ${countPointers(other.names)} чатов.`)
   }
-  if (found.others.length === 0) lines.push('Других аккаунтов на этом компьютере нет.')
+  if (found.others.length === 0) lines.push('Других аккаунтов и окон приложения на этом компьютере нет.')
   lines.push(
     `Будет добавлено: ${plan.copies.length}` +
       (plan.skippedExisting > 0 ? `, уже есть: ${plan.skippedExisting}` : '') +
@@ -99,7 +115,7 @@ const RESTART_HINT =
   'Полностью перезапусти приложение (Cmd+Q и открыть снова), чтобы они появились в списке.'
 
 const NOT_DESKTOP =
-  'keep-sessions: это не сессия десктоп-приложения (нет переменных аккаунта) или папка списка сессий ещё не создана.'
+  'keep-sessions: это не сессия десктоп-приложения (нет переменных аккаунта), или папка списка сессий этого аккаунта ещё не создана, или их несколько и непонятно, какая у этого окна.'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
